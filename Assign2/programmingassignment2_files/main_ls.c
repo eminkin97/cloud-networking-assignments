@@ -179,22 +179,27 @@ void calculateshortestpaths() {
 	int distance[256];
 	unsigned char finished[256];
 	short int predecessor[256];
+	short int priorityqueue[256];
 
 	for (int i = 0; i < 256; i++) {
 		distance[i] = -1;
 		finished[i] = 0;
 		predecessor[i] = -1;
+		priorityqueue[i] = -1;
 	}
 	
 	distance[globalMyID] = 0;
+	priorityqueue[0] = globalMyID;
+	short int pqindex = 0;
 	
 	for (int i = 0; i < 256; i++) {
 		// get node with minimum distance
 		int min_distance = INT_MAX, min_distance_index = -1;
 		for (int j = 0; j < 256; j++) {
-			if (distance[j] != -1 && !finished[j] && distance[j] < min_distance) {
-					min_distance = distance[j];
-					min_distance_index = j;
+			short int index = priorityqueue[j];
+			if (index != -1 && !finished[index] && distance[index] < min_distance) {
+				min_distance = distance[j];
+				min_distance_index = index;
 			}
 		}
 		
@@ -207,6 +212,10 @@ void calculateshortestpaths() {
 				if (distance[j] == -1 || distance[min_distance_index] + vectors[min_distance_index][j] < distance[j]) {
 					distance[j] = distance[min_distance_index] + vectors[min_distance_index][j];
 					predecessor[j] = min_distance_index;
+					
+					//add to priority queue
+					pqindex++;
+					priorityqueue[pqindex] = j;
 				}
 			}
 		}
