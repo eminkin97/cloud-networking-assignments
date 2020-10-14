@@ -15,6 +15,7 @@
 
 void listenForNeighbors();
 void* announceToNeighbors(void* unusedParam);
+void* monitorneighbors(void* unusedParam);
 
 
 int globalMyID = 0;
