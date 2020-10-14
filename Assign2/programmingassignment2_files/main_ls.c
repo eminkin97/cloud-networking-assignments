@@ -32,7 +32,7 @@ short int initial_costs[256];
 
 //variables for link-state algorithm
 short int vectors[256][256];		//undirected graph representing the routing system. value i,j is >= 0 if router i and j are neighbors
-short int seqnums[256]			//sequence numbers of LSAs
+short int seqnums[256];			//sequence numbers of LSAs
 short int shortestpathspredecessors[256];
 
 
@@ -113,6 +113,8 @@ int main(int argc, char** argv)
 	pthread_t announcerThread;
 	pthread_create(&announcerThread, 0, announceToNeighbors, (void*)0);
 	
+	pthread_t monitorNeighborsThread;
+	pthread_create(&monitorNeighborsThread, 0, monitorneighbors, (void*)0);
 	
 	//good luck, have fun!
 	listenForNeighbors(argv[3]);
@@ -121,6 +123,55 @@ int main(int argc, char** argv)
 	
 }
 
+void sendlsa() {
+	//create and send out LSA
+	unsigned char sendBuf[1000];
+	memcpy(sendBuf, "info", 4);
+			
+	unsigned char myrouterid = (unsigned char) globalMyID;
+	memcpy(sendBuf + 4, &myrouterid, 1);
+		
+	seqnums[globalMyID]++;
+	memcpy(sendBuf + 5, &seqnums[globalMyID], 2);
+		
+	memcpy(sendBuf + 7, vectors[globalMyID], 512);
+		
+	// send LSA to all neighbors
+	for(int i = 0; i < 256; i++)
+		if(i != globalMyID)
+			sendto(globalSocketUDP, sendBuf, 530, 0,
+				  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
+}
+
+
+void *monitorneighbors(void *unusedParam) {
+	struct timespec sleepFor;
+	sleepFor.tv_sec = 0;
+	sleepFor.tv_nsec = 500 * 1000 * 1000; //500 ms
+	
+	while (1) {
+		struct timeval currentTime;
+		gettimeofday(&currentTime, 0);
+		
+		for (int i = 0; i < 256; i++) {
+			if (vectors[globalMyID][i] >= 0) {
+				// get elapsed time in microseconds 
+				long elapsed = (currentTime.tv_sec-globalLastHeartbeat[i].tv_sec)*1000000 + currentTime.tv_usec-globalLastHeartbeat[i].tv_usec;
+				
+				if (elapsed >= 1000000) {		//if time since last heartbeat is >= 1 second
+					// cannot reach neighbor set cost of link to -1
+					vectors[globalMyID][i] = -1;
+					
+					//send out LSA
+					sendlsa();
+				}
+			}
+
+		}
+		nanosleep(&sleepFor, 0);
+	}
+
+}
 
 //Run djikstras algorithm to calculate the shortest paths through the network
 void calculateshortestpaths() {
@@ -140,9 +191,9 @@ void calculateshortestpaths() {
 		// get node with minimum distance
 		int min_distance = INT_MAX, min_distance_index = -1;
 		for (int j = 0; j < 256; j++) {
-			if (distance[i] != -1 && !finished[i] && distance[i] < min_distance) {
-					min_distance = distance[i];
-					min_distance_index = i;
+			if (distance[j] != -1 && !finished[j] && distance[j] < min_distance) {
+					min_distance = distance[j];
+					min_distance_index = j;
 			}
 		}
 		
@@ -163,7 +214,6 @@ void calculateshortestpaths() {
 	//save shortest paths
 	memcpy(shortestpathspredecessors, predecessor, 512);
 }
-
 
 
 
@@ -300,26 +350,9 @@ void listenForNeighbors(char *logfilename)
 		}
 		
 		if (mynodeupdated) {
-			//create and send out LSA
-			unsigned char sendBuf[1000];
-			memcpy(sendBuf, "info", 4);
-			
-			unsigned char myrouterid = (unsigned char) globalMyID;
-			memcpy(sendBuf + 4, &myrouterid, 1);
-			
-			seqnums[globalMyID]++;
-			memcpy(sendBuf + 5, &seqnums[globalMyID], 2);
-			
-			memcpy(sendBuf + 7, vectors[globalMyID], 512);
-			
-			// send LSA to all neighbors
-			for(int i = 0; i < 256; i++)
-				if(i != globalMyID)
-					sendto(globalSocketUDP, sendBuf, 530, 0,
-						  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
-			
-			
+			sendlsa();
 		}
+		
 		if (graphupdated) {
 			// run djikstra's algorithm to recalculate best paths
 			calculateshortestpaths();
@@ -328,7 +361,7 @@ void listenForNeighbors(char *logfilename)
 		//Is it a packet from the manager? (see mp2 specification for more details)
 		//send format: 'send'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
 		//forw format: 'forw'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
-		if(!strncmp(recvBuf, "send", 4) || (!strncmp(recvBuf, "forw", 4))
+		if(!strncmp(recvBuf, "send", 4) || (!strncmp(recvBuf, "forw", 4)))
 		{
 			//send the requested message to the requested destination node
 			// Open logfile for writing
