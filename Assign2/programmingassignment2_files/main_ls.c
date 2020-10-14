@@ -27,9 +27,7 @@ int globalSocketUDP;
 //pre-filled for sending to 10.1.1.0 - 255, port 7777
 struct sockaddr_in globalNodeAddrs[256];
 //costs read from file
-int initial_costs[256];
-//logfile to write to
-FILE *logfile;
+short int initial_costs[256];
 
 
 //variables for link-state algorithm
@@ -63,17 +61,11 @@ int main(int argc, char** argv)
 		inet_pton(AF_INET, tempaddr, &globalNodeAddrs[i].sin_addr);
 	}
 	
-	//open log file
-	logfile = fopen(argv[3], "w");
-	if (logfile == NULL) {
-		perror("Opening Log File");
-		exit(1);
-	}
-	
 	//initialize initial costs, distance, and vector arrays
 	for (int i = 0; i < 256; i++) {
 		initial_costs[i] = 1;
 		seqnums[i] = -1;
+		shortestpathspredecessors[i] = -1;
 		for (int j = 0; j < 256; j++) {
 			vectors[i][j] = -1;
 		}
@@ -87,9 +79,9 @@ int main(int argc, char** argv)
 		exit(1);
 	}
 
-	int nodeid;
-	int costval;
-	while (fscanf(fp, "%d %d\n", &nodeid, &costval) != EOF) {
+	short int nodeid;
+	short int costval;
+	while (fscanf(fp, "%hd %hd\n", &nodeid, &costval) != EOF) {
 		initial_costs[nodeid] = costval;
 	}
 	//close costs file
@@ -123,7 +115,7 @@ int main(int argc, char** argv)
 	
 	
 	//good luck, have fun!
-	listenForNeighbors();
+	listenForNeighbors(argv[3]);
 	
 	
 	
@@ -139,24 +131,27 @@ void calculateshortestpaths() {
 	for (int i = 0; i < 256; i++) {
 		distance[i] = -1;
 		finished[i] = 0;
-		predecessor[256] = -1;
+		predecessor[i] = -1;
 	}
 	
 	distance[globalMyID] = 0;
 	
 	for (int i = 0; i < 256; i++) {
 		// get node with minimum distance
-		int min_distance = INT_MAX, min_distance_index;
+		int min_distance = INT_MAX, min_distance_index = -1;
 		for (int j = 0; j < 256; j++) {
-			if (distance[i] != -1 && distance[i] < min_distance) {
+			if (distance[i] != -1 && !finished[i] && distance[i] < min_distance) {
 					min_distance = distance[i];
 					min_distance_index = i;
 			}
 		}
 		
+		if (min_distance_index == -1)
+			continue;
+		
 		finished[min_distance_index] = 1;
 		for (int j = 0; j < 256; j++) {
-			if (!finished[min_distance_index] && vectors[min_distance_index][j] >= 0 && j != min_distance_index) {
+			if (!finished[j] && vectors[min_distance_index][j] >= 0) {
 				if (distance[j] == -1 || distance[min_distance_index] + vectors[min_distance_index][j] < distance[j]) {
 					distance[j] = distance[min_distance_index] + vectors[min_distance_index][j];
 					predecessor[j] = min_distance_index;
@@ -197,7 +192,7 @@ void* announceToNeighbors(void* unusedParam)
 	}
 }
 
-void listenForNeighbors()
+void listenForNeighbors(char *logfilename)
 {
 	char fromAddr[100];
 	struct sockaddr_in theirAddr;
@@ -229,9 +224,19 @@ void listenForNeighbors()
 			//initialize vector representing link if not initialized
 			if (vectors[globalMyID][heardFrom] < 0) {
 				vectors[globalMyID][heardFrom] = initial_costs[heardFrom];
-				vectors[heardFrom][globalMyID] = initial_costs[heardFrom];
 				mynodeupdated = 1;
 				graphupdated = 1;
+				
+				if (vectors[globalMyID][heardFrom] > 1) {
+					//send out costupdate message to neighbor
+					unsigned char sendBuf[10];
+					unsigned char myrouterid = (unsigned char) globalMyID;
+					
+					memcpy(sendBuf, "cupd", 4);
+					memcpy(sendBuf + 4, &vectors[globalMyID][heardFrom], 2);
+					
+					sendto(globalSocketUDP, sendBuf, 8, 0, (struct sockaddr*)&globalNodeAddrs[heardFrom], sizeof(globalNodeAddrs[heardFrom]));
+				}
 			}
 						
 			//record that we heard from heardFrom just now.
@@ -244,6 +249,16 @@ void listenForNeighbors()
 			//TODO record the cost change (remember, the link might currently be down! in that case,
 			//this is the new cost you should treat it as having once it comes back up.)
 			// ...
+		}
+		//'cupd'<4 ASCII bytes> newCost to neighbor <2 byte signed>
+		// determines link cost with your neighbor
+		else if (!strncmp(recvBuf, "cupd", 4)) {
+			short int newcost;
+			memcpy(&newcost, recvBuf + 4, 2);
+			
+			vectors[globalMyID][heardFrom] = newcost;
+			mynodeupdated = 1;
+			graphupdated = 1;
 		}
 		//'info'<4 ASCII bytes>, routerID<1 byte unsigned> seqNum<2 byte signed> vector of costs for this router <256 2 bytes signed>
 		//info about path update from neighbor. Use info to update your own path
@@ -271,14 +286,13 @@ void listenForNeighbors()
 						graphupdated = 1;
 					}
 					vectors[routerId][i] = vector[i];
-					vectors[i][routerId] = vector[i]
 				}
 				
 				
 				
 				// send LSA to all neighbors except one it just came from
 				for(int i = 0; i < 256; i++)
-					if((vectors[globalMyID][i] != -1) && (i != routerId) && (i != globalMyID))
+					if((i != routerId) && (i != globalMyID) && (i != heardFrom))
 						sendto(globalSocketUDP, recvBuf, bytesRecvd, 0,
 							  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
 			}
@@ -296,12 +310,12 @@ void listenForNeighbors()
 			seqnums[globalMyID]++;
 			memcpy(sendBuf + 5, &seqnums[globalMyID], 2);
 			
-			memcpy(sendBuf + 7, vectors[globalMyId], 512);
+			memcpy(sendBuf + 7, vectors[globalMyID], 512);
 			
 			// send LSA to all neighbors
 			for(int i = 0; i < 256; i++)
-				if((vectors[globalMyID][i] != -1) && (i != globalMyID))
-					sendto(globalSocketUDP, sendBuf, 519, 0,
+				if(i != globalMyID)
+					sendto(globalSocketUDP, sendBuf, 530, 0,
 						  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
 			
 			
@@ -317,17 +331,25 @@ void listenForNeighbors()
 		if(!strncmp(recvBuf, "send", 4) || (!strncmp(recvBuf, "forw", 4))
 		{
 			//send the requested message to the requested destination node
-			// ...
+			// Open logfile for writing
+			FILE *logfile = fopen(logfilename, "a");
+			if (logfile == NULL) {
+				perror("Opening Log File");
+				exit(1);
+			}
+			
 			short int destID;
 			memcpy(&destID, recvBuf + 4, 2);
 			destID = ntohs(destID);
 			
+			recvBuf[bytesRecvd] = '\0';
 			char message[100];
 			memcpy(message, recvBuf + 6, 100);
 			
 			if (destID == globalMyID) {
 				//log message to log file
 				fprintf(logfile, "receive packet message %s\n", message);
+				fclose(logfile);
 				continue;
 			}
 			
@@ -336,6 +358,8 @@ void listenForNeighbors()
 			if (shortestpathspredecessors[destID] == -1) {
 				//destination unreachable drop packet
 				fprintf(logfile, "unreachable destination %hd\n", destID);
+				fclose(logfile);
+				continue;
 
 			} else {
 				short int pred = shortestpathspredecessors[destID], current = destID;
@@ -356,6 +380,9 @@ void listenForNeighbors()
 				sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, (struct sockaddr*)&globalNodeAddrs[nexthop], sizeof(globalNodeAddrs[nexthop]));
 				fprintf(logfile, "forward packet dest %hd nexthop %hd message %s\n", destID, nexthop, message);
 			}
+			
+			//close logfile
+			fclose(logfile);
 
 		}
 		
