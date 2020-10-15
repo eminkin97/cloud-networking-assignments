@@ -208,7 +208,7 @@ void calculateshortestpaths() {
 	pqhead -> id = globalMyID;
 	pqhead -> next = NULL;
 	
-	for (int i = 0; i < 256; i++) {
+	while (pqhead != NULL) {
 		// get node with minimum distance
 		int min_distance = INT_MAX, min_distance_index = -1;
 		struct pqnode *prev, *ptr = pqhead;
@@ -217,25 +217,17 @@ void calculateshortestpaths() {
 			if (distance[ptr -> id] < min_distance) {
 				min_distance = distance[ptr -> id];
 				min_distance_index = ptr -> id;
-				*prev_node = prev;
-				*min_distance_node = ptr;
+				prev_node = prev;
+				min_distance_node = ptr;
 			}
 			prev = ptr;
 			ptr = ptr -> next;
 		}
 		
-		if (min_distance_index == -1)
-			continue;
-		
-		// remove min distance node
+		// mark min distance node as finished
 		finished[min_distance_index] = 1;
-		if (prev_node == NULL) {
-			pqhead = pqhead -> next;
-		} else {
-			prev_node -> next = min_distance_node -> next;
-		}
-		free(min_distance_node);
 		
+		//add neighbors of min distance node
 		for (int j = 0; j < 256; j++) {
 			if (!finished[j] && vectors[min_distance_index][j] >= 0) {
 				if (distance[j] == -1 || distance[min_distance_index] + vectors[min_distance_index][j] < distance[j]) {
@@ -273,6 +265,14 @@ void calculateshortestpaths() {
 				}
 			}
 		}
+		
+		//remove min distance node
+		if (prev_node == NULL) {
+			pqhead = pqhead -> next;
+		} else {
+			prev_node -> next = min_distance_node -> next;
+		}
+		free(min_distance_node);
 	}
 	
 	//save shortest paths
