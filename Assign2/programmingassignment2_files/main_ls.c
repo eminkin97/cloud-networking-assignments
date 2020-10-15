@@ -37,6 +37,13 @@ short int seqnums[256];			//sequence numbers of LSAs
 short int shortestpathspredecessors[256];
 
 
+
+struct pqnode {
+	unsigned char id;
+	struct pqnode *next;
+};
+
+
 int main(int argc, char** argv)
 {
 	if(argc != 4)
@@ -88,6 +95,13 @@ int main(int argc, char** argv)
 	//close costs file
 	fclose(fp);
 	
+	//create log file
+	FILE *logfile = fopen(argv[3], "a");
+	if (logfile == NULL) {
+		perror("Opening Log File");
+		exit(1);
+	}
+	fclose(logfile);
 	
 	//socket() and bind() our socket. We will do all sendto()ing and recvfrom()ing on this one.
 	if((globalSocketUDP=socket(AF_INET, SOCK_DGRAM, 0)) < 0)
@@ -179,43 +193,83 @@ void calculateshortestpaths() {
 	int distance[256];
 	unsigned char finished[256];
 	short int predecessor[256];
-	short int priorityqueue[256];
 
 	for (int i = 0; i < 256; i++) {
 		distance[i] = -1;
 		finished[i] = 0;
 		predecessor[i] = -1;
-		priorityqueue[i] = -1;
 	}
 	
 	distance[globalMyID] = 0;
-	priorityqueue[0] = globalMyID;
-	short int pqindex = 0;
+	
+	// create priority queue to deal with tiebreaking
+	struct pqnode *pqhead = (struct pqnode *)malloc(sizeof(struct pqnode));
+	struct pqnode *pqtail = pqhead;
+	pqhead -> id = globalMyID;
+	pqhead -> next = NULL;
 	
 	for (int i = 0; i < 256; i++) {
 		// get node with minimum distance
 		int min_distance = INT_MAX, min_distance_index = -1;
-		for (int j = 0; j < 256; j++) {
-			short int index = priorityqueue[j];
-			if (index != -1 && !finished[index] && distance[index] < min_distance) {
-				min_distance = distance[j];
-				min_distance_index = index;
+		struct pqnode *prev, *ptr = pqhead;
+		struct pqnode *prev_node, *min_distance_node;
+		while (ptr != NULL) {
+			if (distance[ptr -> id] < min_distance) {
+				min_distance = distance[ptr -> id];
+				min_distance_index = ptr -> id;
+				*prev_node = prev;
+				*min_distance_node = ptr;
 			}
+			prev = ptr;
+			ptr = ptr -> next;
 		}
 		
 		if (min_distance_index == -1)
 			continue;
 		
+		// remove min distance node
 		finished[min_distance_index] = 1;
+		if (prev_node == NULL) {
+			pqhead = pqhead -> next;
+		} else {
+			prev_node -> next = min_distance_node -> next;
+		}
+		free(min_distance_node);
+		
 		for (int j = 0; j < 256; j++) {
 			if (!finished[j] && vectors[min_distance_index][j] >= 0) {
 				if (distance[j] == -1 || distance[min_distance_index] + vectors[min_distance_index][j] < distance[j]) {
+					if (distance[j] >= 0) {
+						// node already in priority queue
+						// need to move to end
+						struct pqnode *prev = NULL;
+						struct pqnode *ptr = pqhead;
+						while (ptr != NULL) {
+							if (ptr -> id == j) {
+								if (prev == NULL) {
+									pqhead = pqhead -> next;
+								} else {
+									prev -> next = ptr -> next;
+								}
+								ptr -> next = NULL;
+								pqtail -> next = ptr;
+								pqtail = ptr;
+								break;
+							}
+							prev = ptr;
+							ptr = ptr -> next;
+						}
+					} else {
+						//add to end of priority queue
+						struct pqnode *newnode = (struct pqnode *)malloc(sizeof(struct pqnode));
+						newnode -> id = j;
+						newnode -> next = NULL;
+						pqtail -> next = newnode;
+						pqtail = newnode;
+					}		
+			
 					distance[j] = distance[min_distance_index] + vectors[min_distance_index][j];
 					predecessor[j] = min_distance_index;
-					
-					//add to priority queue
-					pqindex++;
-					priorityqueue[pqindex] = j;
 				}
 			}
 		}
