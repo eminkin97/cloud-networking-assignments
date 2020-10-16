@@ -144,8 +144,8 @@ void *sendlsa(void *unusedParam) {
 	//create and send out LSA
 	while(1) {
 		struct timespec sleepFor;
-		sleepFor.tv_sec = 0;
-		sleepFor.tv_nsec = 1000 * 1000 * 1000; //1 second
+		sleepFor.tv_sec = 1;  //1 second
+		sleepFor.tv_nsec = 0; 
 		
 		nanosleep(&sleepFor, 0);
 		
@@ -440,6 +440,8 @@ void listenForNeighbors(char *logfilename)
 		if(!strncmp(recvBuf, "send", 4) || (!strncmp(recvBuf, "forw", 4)))
 		{
 			//send the requested message to the requested destination node
+			//output to log file
+			char logline[200];
 			// Open logfile for writing
 			FILE *logfile = fopen(logfilename, "a");
 			if (logfile == NULL) {
@@ -457,7 +459,8 @@ void listenForNeighbors(char *logfilename)
 			
 			if (destID == globalMyID) {
 				//log message to log file
-				fprintf(logfile, "receive packet message %s\n", message);
+				sprintf(logline, "receive packet message %s\n", message);
+				fwrite(logline, 1, strlen(logline), logfile);
 				fclose(logfile);
 				continue;
 			}
@@ -466,7 +469,8 @@ void listenForNeighbors(char *logfilename)
 			short int nexthop;
 			if (shortestpathspredecessors[destID] == -1) {
 				//destination unreachable drop packet
-				fprintf(logfile, "unreachable dest %hd\n", destID);
+				sprintf(logline, "unreachable dest %hd\n", destID);
+				fwrite(logline, 1, strlen(logline), logfile);
 				fclose(logfile);
 				continue;
 
@@ -484,12 +488,13 @@ void listenForNeighbors(char *logfilename)
 			if(!strncmp(recvBuf, "send", 4)) {
 				memcpy(recvBuf, "forw", 4);
 				sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, (struct sockaddr*)&globalNodeAddrs[nexthop], sizeof(globalNodeAddrs[nexthop]));
-				fprintf(logfile, "sending packet dest %hd nexthop %hd message %s\n", destID, nexthop, message);
+				sprintf(logline, "sending packet dest %hd nexthop %hd message %s\n", destID, nexthop, message);
 			} else {
 				sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, (struct sockaddr*)&globalNodeAddrs[nexthop], sizeof(globalNodeAddrs[nexthop]));
-				fprintf(logfile, "forward packet dest %hd nexthop %hd message %s\n", destID, nexthop, message);
+				sprintf(logline, "forward packet dest %hd nexthop %hd message %s\n", destID, nexthop, message);
 			}
-			
+			fwrite(logline, 1, strlen(logline), logfile);
+
 			//close logfile
 			fclose(logfile);
 
