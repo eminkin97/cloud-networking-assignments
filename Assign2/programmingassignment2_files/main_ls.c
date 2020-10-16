@@ -15,7 +15,7 @@
 
 void listenForNeighbors();
 void* announceToNeighbors(void* unusedParam);
-void* monitorneighbors(void* unusedParam);
+void *sendlsa(void *unusedParam);
 
 
 int globalMyID = 0;
@@ -36,6 +36,8 @@ short int vectors[256][256];		//undirected graph representing the routing system
 short int seqnums[256];			//sequence numbers of LSAs
 short int shortestpathspredecessors[256];
 
+//last time my distance vector was updated ... used for sending lsas
+struct timeval mynodelastupdated;
 
 
 struct pqnode {
@@ -128,8 +130,8 @@ int main(int argc, char** argv)
 	pthread_t announcerThread;
 	pthread_create(&announcerThread, 0, announceToNeighbors, (void*)0);
 	
-	pthread_t monitorNeighborsThread;
-	pthread_create(&monitorNeighborsThread, 0, monitorneighbors, (void*)0);
+	pthread_t lsaThread;
+	pthread_create(&lsaThread, 0, sendlsa, (void*)0);
 	
 	//good luck, have fun!
 	listenForNeighbors(argv[3]);
@@ -138,52 +140,60 @@ int main(int argc, char** argv)
 	
 }
 
-void sendlsa() {
+void *sendlsa(void *unusedParam) {
 	//create and send out LSA
-	unsigned char sendBuf[1000];
-	memcpy(sendBuf, "info", 4);
+	while(1) {
+		struct timespec sleepFor;
+		sleepFor.tv_sec = 0;
+		sleepFor.tv_nsec = 1000 * 1000 * 1000; //1 second
+		
+		nanosleep(&sleepFor, 0);
+		
+		//how long since node been updated
+		struct timeval currentTime;
+		gettimeofday(&currentTime, 0);
+ 
+		long elapsed = (currentTime.tv_sec-mynodelastupdated.tv_sec)*1000000 + currentTime.tv_usec-mynodelastupdated.tv_usec;
+				
+		if (elapsed <= 3000000) {		//if time since last heartbeat is <= 3 seconds send lsa's every second
 			
-	unsigned char myrouterid = (unsigned char) globalMyID;
-	memcpy(sendBuf + 4, &myrouterid, 1);
-		
-	seqnums[globalMyID]++;
-	memcpy(sendBuf + 5, &seqnums[globalMyID], 2);
-		
-	memcpy(sendBuf + 7, vectors[globalMyID], 512);
-		
-	// send LSA to all neighbors
-	for(int i = 0; i < 256; i++)
-		if(i != globalMyID)
-			sendto(globalSocketUDP, sendBuf, 530, 0,
-				  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
+			
+			unsigned char sendBuf[1000];
+			memcpy(sendBuf, "info", 4);
+					
+			unsigned char myrouterid = (unsigned char) globalMyID;
+			memcpy(sendBuf + 4, &myrouterid, 1);
+				
+			seqnums[globalMyID]++;
+			memcpy(sendBuf + 5, &seqnums[globalMyID], 2);
+				
+			memcpy(sendBuf + 7, vectors[globalMyID], 512);
+				
+			// send LSA to all neighbors
+			for(int i = 0; i < 256; i++)
+				if(i != globalMyID)
+					sendto(globalSocketUDP, sendBuf, 530, 0,
+						  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
+		}
+	}
 }
 
 
-void *monitorneighbors(void *unusedParam) {
-	struct timespec sleepFor;
-	sleepFor.tv_sec = 0;
-	sleepFor.tv_nsec = 500 * 1000 * 1000; //500 ms
+void monitorneighbors() {
 	
-	while (1) {
-		struct timeval currentTime;
-		gettimeofday(&currentTime, 0);
-		
-		for (int i = 0; i < 256; i++) {
-			if (vectors[globalMyID][i] >= 0) {
-				// get elapsed time in microseconds 
-				long elapsed = (currentTime.tv_sec-globalLastHeartbeat[i].tv_sec)*1000000 + currentTime.tv_usec-globalLastHeartbeat[i].tv_usec;
-				
-				if (elapsed >= 1000000) {		//if time since last heartbeat is >= 1 second
-					// cannot reach neighbor set cost of link to -1
-					vectors[globalMyID][i] = -1;
-					
-					//send out LSA
-					sendlsa();
-				}
-			}
+	struct timeval currentTime;
+	gettimeofday(&currentTime, 0);
 
+	for (int i = 0; i < 256; i++) {
+		if (vectors[globalMyID][i] >= 0) {
+			// get elapsed time in microseconds 
+			long elapsed = (currentTime.tv_sec-globalLastHeartbeat[i].tv_sec)*1000000 + currentTime.tv_usec-globalLastHeartbeat[i].tv_usec;
+			
+			if (elapsed >= 1000000) {		//if time since last heartbeat is >= 1 second
+				// cannot reach neighbor set cost of link to -1
+				vectors[globalMyID][i] = -1;
+			}
 		}
-		nanosleep(&sleepFor, 0);
 	}
 
 }
@@ -211,16 +221,12 @@ void calculateshortestpaths() {
 	while (pqhead != NULL) {
 		// get node with minimum distance
 		int min_distance = INT_MAX, min_distance_index = -1;
-		struct pqnode *prev, *ptr = pqhead;
-		struct pqnode *prev_node, *min_distance_node;
+		struct pqnode *prev = NULL, *ptr = pqhead;
 		while (ptr != NULL) {
 			if (distance[ptr -> id] < min_distance) {
 				min_distance = distance[ptr -> id];
 				min_distance_index = ptr -> id;
-				prev_node = prev;
-				min_distance_node = ptr;
 			}
-			prev = ptr;
 			ptr = ptr -> next;
 		}
 		
@@ -234,8 +240,8 @@ void calculateshortestpaths() {
 					if (distance[j] >= 0) {
 						// node already in priority queue
 						// need to move to end
-						struct pqnode *prev = NULL;
-						struct pqnode *ptr = pqhead;
+						prev = NULL;
+						ptr = pqhead;
 						while (ptr != NULL) {
 							if (ptr -> id == j) {
 								if (prev == NULL) {
@@ -266,13 +272,22 @@ void calculateshortestpaths() {
 			}
 		}
 		
-		//remove min distance node
-		if (prev_node == NULL) {
-			pqhead = pqhead -> next;
-		} else {
-			prev_node -> next = min_distance_node -> next;
+		// remove min distance node
+		prev = NULL;
+		ptr = pqhead;
+		while (ptr != NULL) {
+			if (ptr -> id == min_distance_index) {
+				if (prev == NULL) {
+					pqhead = pqhead -> next;
+				} else {
+					prev -> next = ptr -> next;
+				}
+				free(ptr);
+				break;
+			}
+			prev = ptr;
+			ptr = ptr -> next;
 		}
-		free(min_distance_node);
 	}
 	
 	//save shortest paths
@@ -302,6 +317,7 @@ void* announceToNeighbors(void* unusedParam)
 	while(1)
 	{
 		hackyBroadcast("HEREIAM", 7);
+		monitorneighbors();
 		nanosleep(&sleepFor, 0);
 	}
 }
@@ -328,7 +344,6 @@ void listenForNeighbors(char *logfilename)
 		
 		short int heardFrom = -1;
 		unsigned char graphupdated = 0;		//whether graph was updated or not
-		unsigned char mynodeupdated = 0;	//whether my node ing graph was updated
 		if(strstr(fromAddr, "10.1.1."))
 		{
 			heardFrom = atoi(
@@ -338,7 +353,7 @@ void listenForNeighbors(char *logfilename)
 			//initialize vector representing link if not initialized
 			if (vectors[globalMyID][heardFrom] < 0) {
 				vectors[globalMyID][heardFrom] = initial_costs[heardFrom];
-				mynodeupdated = 1;
+				gettimeofday(&mynodelastupdated, 0);
 				graphupdated = 1;
 				
 				if (vectors[globalMyID][heardFrom] > 1) {
@@ -371,7 +386,7 @@ void listenForNeighbors(char *logfilename)
 			memcpy(&newcost, recvBuf + 4, 2);
 			
 			vectors[globalMyID][heardFrom] = newcost;
-			mynodeupdated = 1;
+			gettimeofday(&mynodelastupdated, 0);
 			graphupdated = 1;
 		}
 		//'info'<4 ASCII bytes>, routerID<1 byte unsigned> seqNum<2 byte signed> vector of costs for this router <256 2 bytes signed>
@@ -413,9 +428,6 @@ void listenForNeighbors(char *logfilename)
 			
 		}
 		
-		if (mynodeupdated) {
-			sendlsa();
-		}
 		
 		if (graphupdated) {
 			// run djikstra's algorithm to recalculate best paths
@@ -454,7 +466,7 @@ void listenForNeighbors(char *logfilename)
 			short int nexthop;
 			if (shortestpathspredecessors[destID] == -1) {
 				//destination unreachable drop packet
-				fprintf(logfile, "unreachable destination %hd\n", destID);
+				fprintf(logfile, "unreachable dest %hd\n", destID);
 				fclose(logfile);
 				continue;
 
