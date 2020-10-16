@@ -144,8 +144,8 @@ void *sendlsa(void *unusedParam) {
 	//create and send out LSA
 	while(1) {
 		struct timespec sleepFor;
-		sleepFor.tv_sec = 1;  //1 second
-		sleepFor.tv_nsec = 0; 
+		sleepFor.tv_sec = 0;
+		sleepFor.tv_nsec = 500 * 1000 * 1000; 	// half a second
 		
 		nanosleep(&sleepFor, 0);
 		
@@ -155,7 +155,7 @@ void *sendlsa(void *unusedParam) {
  
 		long elapsed = (currentTime.tv_sec-mynodelastupdated.tv_sec)*1000000 + currentTime.tv_usec-mynodelastupdated.tv_usec;
 				
-		if (elapsed <= 3000000) {		//if time since last heartbeat is <= 3 seconds send lsa's every second
+		if (elapsed <= 1500000) {		//if time since last heartbeat is <= 3 seconds send lsa's every second
 			
 			
 			unsigned char sendBuf[1000];
@@ -171,7 +171,7 @@ void *sendlsa(void *unusedParam) {
 				
 			// send LSA to all neighbors
 			for(int i = 0; i < 256; i++)
-				if(i != globalMyID)
+				if(vectors[globalMyID][i] >= 0 && i != globalMyID)
 					sendto(globalSocketUDP, sendBuf, 530, 0,
 						  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
 		}
@@ -192,6 +192,7 @@ void monitorneighbors() {
 			if (elapsed >= 1000000) {		//if time since last heartbeat is >= 1 second
 				// cannot reach neighbor set cost of link to -1
 				vectors[globalMyID][i] = -1;
+				gettimeofday(&mynodelastupdated, 0);
 			}
 		}
 	}
@@ -421,7 +422,7 @@ void listenForNeighbors(char *logfilename)
 				
 				// send LSA to all neighbors except one it just came from
 				for(int i = 0; i < 256; i++)
-					if((i != routerId) && (i != globalMyID) && (i != heardFrom))
+					if(vectors[globalMyID][i] >= 0 && (i != heardFrom) && (i != globalMyID) && (i != routerId))
 						sendto(globalSocketUDP, recvBuf, bytesRecvd, 0,
 							  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
 			}
